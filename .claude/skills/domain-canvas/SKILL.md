@@ -1,78 +1,25 @@
 ---
-description: Build or update a single-source interactive domain canvas that connects UI screens, a conceptual model, and an ER diagram. Use when the user wants to understand how product objects relate across design data and database structure, asks for an object map/domain map/ER view tied to screens, or wants a navigable design-system canvas generated from project docs and code.
-argument-hint: "[scope or feature name]"
+name: domain-canvas
+description: Build or update a single-source interactive domain canvas from project docs and code. Use for screen-to-domain maps, conceptual models, ER diagrams, state transitions, processing sequences, service blueprints, data lineage, and KPI decomposition, or when choosing diagrams for engineers, beginners, and business decision makers.
 ---
 
 # Domain Canvas
 
-Create or update an interactive canvas where **Design**, **Concept**, and **ER** views are all generated from the same canonical model.
-
-The goal is not merely to draw three diagrams. The goal is to make object relationships reviewable from multiple levels without duplicating the source of truth.
+Generate eight complementary views from one canonical model. Choose the view by the reader's question, then show the smallest useful scope with its assumptions intact.
 
 ## Outputs
 
-Maintain these files in the project unless the user specifies another location:
-
-- `.domain-canvas/model.json` — canonical source of truth
-- `.domain-canvas/index.html` — generated interactive canvas
-- `.domain-canvas/README.md` — short notes on sources, unresolved assumptions, and refresh command
-
-Do not hand-edit generated `index.html`. Update `model.json`, then regenerate.
+Maintain `.domain-canvas/model.json`, generated `.domain-canvas/index.html`, and `.domain-canvas/README.md` for sources, unresolved assumptions, and the refresh command. Preserve user-specified locations. Change the model or bundled template, then regenerate; never hand-edit generated HTML.
 
 ## Workflow
 
-### 1. Inspect the project before asking questions
-
-Search for the strongest available sources in this order:
-
-1. Database schema / migrations / ORM models
-2. Typed domain models, API schemas, GraphQL schema, OpenAPI
-3. PRDs, specs, ADRs, design docs
-4. UI routes, page components, storybook, prototype HTML
-5. Screenshots or image assets explicitly provided by the user
-
-Only ask the user for information that materially changes the model and cannot be derived from the repo.
-
-### 2. Build the canonical model
-
-Use `references/model-schema.md`.
-
-The canonical model must separate:
-
-- **Entities** — stable domain objects
-- **Attributes** — data carried by entities
-- **Relationships** — semantic or database relationships
-- **Screens** — UI views and which entities they expose or mutate
-- **Concept groups** — optional business-level groupings for a cleaner conceptual view
-
-Prefer stable IDs (`customer`, `contract`, `property`) over display names.
-
-Never invent a database relationship because two concepts appear near each other in UI. Mark uncertain relationships with `confidence: "inferred"` and explain the evidence in `.domain-canvas/README.md`.
-
-### 3. Preserve one source of truth
-
-All three views must be projections of the same `.domain-canvas/model.json`.
-
-- Design view: screens + entity bindings
-- Concept view: entity meanings + semantic relationships
-- ER view: attributes + keys + cardinalities
-
-If a relationship is changed, change it once in `model.json` and regenerate all views.
-
-### 4. Attach real design data when available
-
-For each screen, prefer one of:
-
-- `preview_image`: relative path to a PNG/JPG/WebP screenshot
-- `preview_html`: relative path to a local HTML prototype
-
-If neither exists, generate a labeled placeholder card. Do not fabricate a pixel-perfect screen.
-
-When screenshots or HTML prototypes are available, map the screen to entities through `bindings`.
-
-### 5. Generate the canvas
-
-Run:
+1. **Inspect before asking.** Read an existing model first. Search migrations/ORM, typed models/API schemas, specifications/ADRs, routes/components, and user-provided prototypes. Read `references/extraction-rules.md` for which source supports which claim. Preserve stable IDs and confirmed labels.
+2. **Choose the question and scope.** Read `references/diagram-selection.md`. Use one screen, entity neighborhood, process, cohort, or decision at a time. Beginners need concrete names and actions; engineers need constraints and exceptions; business readers need definitions and comparison conditions. Do not fill every view merely because it exists.
+3. **Build one canonical model.** Read `references/model-schema.md`. Keep entities, screens, and relationships shared; extend them with stable references in `state_machines`, `scenarios`, `journeys`, `lineage`, and `outcomes` only when the required information exists. Version 1 models remain accepted. Omitted extensions display an honest empty state.
+4. **Preserve evidence.** Mark `confirmed`, `inferred`, `illustrative`, or `unknown`. Keep evidence next to each claim. An enum type does not establish transitions; a screen binding does not establish API order; an FK does not establish a business metric. Use `illustrative` and `is_example: true` for constructed samples. Do not turn unknown real values into zero.
+5. **Refine the view.** Read `references/visual-design.md`. Show names and primary relationships first. Put full attributes, conditions, formulas, and evidence in the inspector. Keep units, population, observation window, boundaries, and material exceptions visible or directly accessible. Use specialized sequence/matrix layouts where order or alignment carries meaning.
+6. **Attach actual screen evidence.** Use `preview_image` or self-contained `preview_html` relative to the model directory. Missing supplied assets are errors; absent assets produce “プレビュー未登録”. HTML previews are sandboxed. Do not invent screenshots.
+7. **Generate and validate.** Run the command below. Check references, nullable/FK consistency, transition conditions, message order, blueprint alignment, lineage grain, and metric arithmetic. Review at least one representative view per added family, a long label, detail selection, and a narrow screen when browser access is available. State any unverified rendering rather than claiming a visual pass.
 
 ```bash
 python .claude/skills/domain-canvas/scripts/generate_canvas.py \
@@ -80,51 +27,25 @@ python .claude/skills/domain-canvas/scripts/generate_canvas.py \
   --out .domain-canvas/index.html
 ```
 
-If the project skill is installed at a different path, resolve the script path from this skill directory.
+Resolve the script relative to this skill when installed elsewhere. Python 3.9+ is required; copy the entire skill directory, including `assets/canvas.html`. The generated canvas needs no JavaScript dependencies or server.
 
-### 6. Validate before presenting
+## View semantics
 
-Check all of the following:
+| Group | View | Meaning of a connection |
+|---|---|---|
+| Structure | Design | Screen displays, creates, or updates an entity |
+| Structure | Concept | Business relationship between entities |
+| Structure | ER | Data relationship with cardinality and keys |
+| Behavior | Lifecycle | Permitted state change caused by an event |
+| Behavior | Sequence | Message from one participant to another, in order |
+| Behavior | Service | Same process stage across customer, frontstage, backstage, and support |
+| Measurement | Lineage | Dataset input/output of a transformation |
+| Measurement | Outcome | Arithmetic decomposition of a metric, not a causal effect |
 
-- JSON parses successfully.
-- Every relationship endpoint references an existing entity.
-- Every screen binding references an existing entity.
-- Primary/foreign-key flags do not contradict the available schema.
-- The generator completes without errors.
-- `index.html` contains the same count of entities and screens as `model.json`.
-- If a preview path is supplied, the referenced file exists.
+A generic arrow must not blur those meanings. Concept and ER are different projections of shared relationships; domain-only relationships are omitted from ER.
 
-If possible, open the generated HTML in a browser and visually inspect at least one view switch and one pan/zoom action.
+## Updating and completion
 
-## Modeling rules
+Reconcile changes into the existing model, preserving confirmed IDs and user labels. Resolve conflicting evidence and report ambiguous removals before deleting them. Regenerate all affected projections together.
 
-Use `references/extraction-rules.md` for evidence and ambiguity handling.
-
-Important defaults:
-
-- Concept view should be understandable by product/design stakeholders; omit implementation-only fields.
-- ER view may show implementation details, but do not promote inferred fields to confirmed schema.
-- UI bindings are many-to-many: one screen may expose several entities and one entity may appear on many screens.
-- Keep the conceptual graph smaller than the ER graph when possible.
-- Use relationship labels that describe business meaning (`owns`, `applies to`, `has documents`) instead of only technical FK names.
-
-## Update behavior
-
-When `.domain-canvas/model.json` already exists:
-
-1. Read it first.
-2. Preserve confirmed IDs and user-authored labels unless the source has changed.
-3. Reconcile repo changes into the model.
-4. Report any removed or renamed entities explicitly before deleting them from the canonical model when the evidence is ambiguous.
-5. Regenerate `index.html` after model changes.
-
-## Completion format
-
-State:
-
-- what sources were used,
-- what was generated or updated,
-- any unresolved inferred relationships,
-- the command to refresh the canvas.
-
-Do not claim the model is authoritative beyond the evidence in the project.
+Report the sources used, views updated, validation performed, unresolved assumptions, and refresh command. Do not claim authority beyond the evidence. For KPI samples, independently check arithmetic and conditional denominators; never link a cohort metric to a period aggregate without a supported mapping.

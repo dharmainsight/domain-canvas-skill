@@ -1,129 +1,373 @@
 #!/usr/bin/env python3
-import argparse, json, html, sys
+"""Validate one canonical model and emit a dependency-free Domain Canvas."""
+import argparse
+import base64
+import copy
+import html
+import json
+import math
+import re
+import sys
 from pathlib import Path
 
+CONFIDENCES = ("confirmed", "inferred", "illustrative", "unknown")
+CARDINALITIES = ("1", "0..1", "1..*", "0..*")
+EXTENSIONS = ("state_machines", "scenarios", "journeys", "lineage", "outcomes")
 
-def validate(m):
-    errs=[]
-    for key in ["title","version","entities","relationships","screens","concept_groups"]:
-        if key not in m: errs.append(f"missing root field: {key}")
-    eids=[e.get("id") for e in m.get("entities",[])]
-    if len(eids)!=len(set(eids)): errs.append("duplicate entity ids")
-    sids=[s.get("id") for s in m.get("screens",[])]
-    if len(sids)!=len(set(sids)): errs.append("duplicate screen ids")
-    eset=set(eids)
-    for r in m.get("relationships",[]):
-        if r.get("from") not in eset: errs.append(f"relationship {r.get('id')} has unknown from={r.get('from')}")
-        if r.get("to") not in eset: errs.append(f"relationship {r.get('id')} has unknown to={r.get('to')}")
-    for s in m.get("screens",[]):
-        for b in s.get("bindings",[]):
-            if b.get("entity") not in eset: errs.append(f"screen {s.get('id')} binds unknown entity={b.get('entity')}")
-    return errs
+
+def validate(model):
+    """Return actionable errors; never mutate the supplied model."""
+    errors = []
+    if not isinstance(model, dict):
+        return ["model must be an object"]
+
+    def fail(where, message):
+        errors.append(f"{where}: {message}")
+
+    def array(obj, field, where, required=False):
+        value = obj.get(field, None if required else [])
+        if not isinstance(value, list):
+            fail(where, f"{field} must be an array")
+            return []
+        result = []
+        for i, item in enumerate(value):
+            if not isinstance(item, dict):
+                fail(f"{where}.{field}[{i}]", "must be an object")
+            else:
+                result.append(item)
+        return result
+
+    def ids(items, where):
+        result = set()
+        for item in items:
+            value = item.get("id")
+            if not isinstance(value, str) or not value.strip():
+                fail(where, "each item needs a nonempty string id")
+            elif value in result:
+                fail(where, f"duplicate id {value!r}")
+            else:
+                result.add(value)
+        return result
+
+    def ref(value, targets, where):
+        if not isinstance(value, str) or value not in targets:
+            fail(where, f"unknown reference {value!r}")
+
+    def refs(item, field, targets, where, required=False):
+        values = item.get(field, None if required else [])
+        if not isinstance(values, list) or not all(isinstance(x, str) for x in values):
+            fail(where, f"{field} must be an array of ids")
+            return []
+        if len(values) != len(set(values)):
+            fail(where, f"{field} contains duplicate references")
+        for value in values:
+            ref(value, targets, f"{where}.{field}")
+        return values
+
+    def metadata(item, where):
+        if item.get("confidence", "unknown") not in CONFIDENCES:
+            fail(where, "confidence must be confirmed, inferred, illustrative, or unknown")
+        for field in ("name", "description", "evidence", "note", "condition", "actor", "grain", "rule"):
+            if field in item and not isinstance(item[field], str):
+                fail(where, f"{field} must be a string")
+
+    def acyclic(nodes, edges, where):
+        graph = {n: [] for n in nodes}
+        for a, b in edges:
+            if isinstance(a, str) and isinstance(b, str) and a in graph and b in graph:
+                graph[a].append(b)
+        state = {}
+        def visit(n):
+            if state.get(n) == 1:
+                return False
+            if state.get(n) == 2:
+                return True
+            state[n] = 1
+            if not all(visit(child) for child in graph[n]):
+                return False
+            state[n] = 2
+            return True
+        if not all(visit(n) for n in graph):
+            fail(where, "contains a cycle; use separate versioned datasets or acyclic metric inputs")
+
+    if not isinstance(model.get("title"), str) or not model["title"].strip():
+        fail("model", "title must be a nonempty string")
+    if type(model.get("version")) is not int or model["version"] not in (1, 2):
+        fail("model", "version must be 1 or 2")
+    entities = array(model, "entities", "model", True)
+    screens = array(model, "screens", "model", True)
+    relations = array(model, "relationships", "model", True)
+    groups = array(model, "concept_groups", "model", True)
+    eids, sids = ids(entities, "entities"), ids(screens, "screens")
+    gids = ids(groups, "concept_groups")
+    ids(relations, "relationships")
+    for group in groups:
+        metadata(group, "concept_group")
+    attributes = {}
+    for entity in entities:
+        where = f"entity {entity.get('id')}"
+        metadata(entity, where)
+        if "group" in entity:
+            ref(entity["group"], gids, where)
+        attrs = array(entity, "attributes", where, True)
+        names = [a.get("name") for a in attrs]
+        if not all(isinstance(n, str) and n for n in names):
+            fail(where, "attributes need string names")
+        elif len(names) != len(set(names)):
+            fail(where, "duplicate attribute names")
+        if isinstance(entity.get("id"), str):
+            attributes[entity["id"]] = {n for n in names if isinstance(n, str)}
+        for attr in attrs:
+            for flag in ("pk", "nullable"):
+                if flag in attr and type(attr[flag]) is not bool:
+                    fail(where, f"attribute {attr.get('name')}.{flag} must be boolean")
+            if attr.get("pk") and attr.get("nullable"):
+                fail(where, f"primary key {attr.get('name')} cannot be nullable")
+    for entity in entities:
+        for attr in entity.get("attributes", []) if isinstance(entity.get("attributes"), list) else []:
+            if not isinstance(attr, dict) or "fk" not in attr:
+                continue
+            fk = attr["fk"]
+            where = f"entity {entity.get('id')}.{attr.get('name')}.fk"
+            if not isinstance(fk, dict):
+                fail(where, "must be an entity/attribute object")
+                continue
+            ref(fk.get("entity"), eids, where)
+            target = fk.get("entity")
+            ref(fk.get("attribute"), attributes.get(target, set()) if isinstance(target, str) else set(), where)
+    for rel in relations:
+        where = f"relationship {rel.get('id')}"
+        metadata(rel, where)
+        ref(rel.get("from"), eids, where)
+        ref(rel.get("to"), eids, where)
+        for field in ("from_cardinality", "to_cardinality"):
+            if rel.get(field) not in CARDINALITIES:
+                fail(where, f"invalid {field}")
+        if rel.get("kind") not in ("domain", "database", "both"):
+            fail(where, "invalid kind")
+    for screen in screens:
+        where = f"screen {screen.get('id')}"
+        metadata(screen, where)
+        for binding in array(screen, "bindings", where, True):
+            ref(binding.get("entity"), eids, where)
+            if binding.get("role") not in ("primary", "context", "collection", "edit", "create"):
+                fail(where, "invalid binding role")
+        for field in ("preview_html", "preview_image"):
+            value = screen.get(field)
+            if value is not None and (not isinstance(value, str) or not value or Path(value).is_absolute() or ".." in Path(value).parts or re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", value)):
+                fail(where, f"{field} must be a relative asset path inside the model directory")
+    extensions = {}
+    for field in EXTENSIONS:
+        extensions[field] = array(model, field, "model")
+        ids(extensions[field], field)
+        for item in extensions[field]:
+            metadata(item, f"{field} {item.get('id')}")
+            refs(item, "entity_ids", eids, f"{field} {item.get('id')}")
+    for machine in extensions["state_machines"]:
+        where = f"state_machine {machine.get('id')}"
+        ref(machine.get("entity_id"), eids, where)
+        states = array(machine, "states", where, True)
+        state_ids = ids(states, where)
+        ref(machine.get("initial"), state_ids, where)
+        for state in states:
+            metadata(state, where)
+            if "terminal" in state and type(state["terminal"]) is not bool:
+                fail(where, "terminal must be boolean")
+        transitions = array(machine, "transitions", where, True)
+        ids(transitions, where)
+        for trans in transitions:
+            metadata(trans, where)
+            ref(trans.get("from"), state_ids, where)
+            ref(trans.get("to"), state_ids, where)
+            if not isinstance(trans.get("label"), str) or not trans["label"]:
+                fail(where, "transitions need an event label")
+        terminal = {s.get("id") for s in states if s.get("terminal") and isinstance(s.get("id"), str)}
+        if any(isinstance(t.get("from"), str) and t["from"] in terminal for t in transitions):
+            fail(where, "terminal states cannot have outgoing transitions")
+    for scenario in extensions["scenarios"]:
+        where = f"scenario {scenario.get('id')}"
+        if "screen_id" in scenario:
+            ref(scenario["screen_id"], sids, where)
+        participants = array(scenario, "participants", where, True)
+        pids = ids(participants, where)
+        if not participants:
+            fail(where, "at least one participant is required")
+        if pids & ids(messages := array(scenario, "messages", where, True), where + ".messages"):
+            fail(where, "participant and message ids must be distinct")
+        for participant in participants:
+            metadata(participant, where)
+            if "entity_id" in participant:
+                ref(participant["entity_id"], eids, where)
+        for message in messages:
+            metadata(message, where)
+            ref(message.get("from"), pids, where)
+            ref(message.get("to"), pids, where)
+            if message.get("kind", "call") not in ("call", "return", "async"):
+                fail(where, "message kind must be call, return, or async")
+            if not isinstance(message.get("label"), str) or not message["label"]:
+                fail(where, "messages need a label")
+    for journey in extensions["journeys"]:
+        where = f"journey {journey.get('id')}"
+        step_items = array(journey, "steps", where, True)
+        lane_items = array(journey, "lanes", where, True)
+        steps = ids(step_items, where + ".steps")
+        lanes = ids(lane_items, where + ".lanes")
+        if not steps or not lanes:
+            fail(where, "at least one step and lane are required")
+        for item in step_items + lane_items:
+            metadata(item, where)
+        cells = array(journey, "cells", where, True)
+        ids(cells, where + ".cells")
+        for cell in cells:
+            ref(cell.get("step"), steps, where)
+            ref(cell.get("lane"), lanes, where)
+            refs(cell, "entity_ids", eids, where)
+            refs(cell, "screen_ids", sids, where)
+            metadata(cell, where)
+    for lineage in extensions["lineage"]:
+        where = f"lineage {lineage.get('id')}"
+        datasets = array(lineage, "datasets", where, True)
+        jobs = array(lineage, "jobs", where, True)
+        dids, jids = ids(datasets, where), ids(jobs, where)
+        if dids & jids:
+            fail(where, "dataset and job ids must be distinct")
+        for dataset in datasets:
+            metadata(dataset, where)
+            if "entity_id" in dataset:
+                ref(dataset["entity_id"], eids, where)
+        edges = []
+        for job in jobs:
+            metadata(job, where)
+            ins = refs(job, "inputs", dids, where, True)
+            outs = refs(job, "outputs", dids, where, True)
+            if not ins or not outs:
+                fail(where, "jobs need at least one input and one output")
+            edges.extend((i, job.get("id")) for i in ins)
+            edges.extend((job.get("id"), o) for o in outs)
+        acyclic(dids | jids, edges, where)
+    for outcome in extensions["outcomes"]:
+        where = f"outcome {outcome.get('id')}"
+        metrics = array(outcome, "metrics", where, True)
+        mids = ids(metrics, where)
+        ref(outcome.get("root"), mids, where)
+        for field in ("population", "window"):
+            if not isinstance(outcome.get(field), str) or not outcome[field].strip():
+                fail(where, f"{field} is required to interpret metrics")
+        edges = []
+        for metric in metrics:
+            mwhere = where + f".metric {metric.get('id')}"
+            metadata(metric, mwhere)
+            refs(metric, "entity_ids", eids, mwhere)
+            if not isinstance(metric.get("unit"), str):
+                fail(mwhere, "unit is required")
+            if "operator" in metric:
+                if "value" in metric:
+                    fail(mwhere, "derived metrics cannot also have a stored value")
+                if metric["operator"] not in ("product", "sum", "ratio"):
+                    fail(mwhere, "operator must be product, sum, or ratio")
+                inputs = refs(metric, "inputs", mids, mwhere, True)
+                if not inputs or metric["operator"] == "ratio" and len(inputs) != 2:
+                    fail(mwhere, "invalid number of inputs")
+                edges.extend((metric.get("id"), i) for i in inputs)
+            else:
+                value = metric.get("value")
+                if type(value) not in (int, float) or not math.isfinite(value):
+                    fail(mwhere, "leaf value must be a finite number")
+                elif metric.get("unit") == "%" and not 0 <= value <= 1:
+                    fail(mwhere, "percent values must be fractions between 0 and 1")
+        acyclic(mids, edges, where)
+    if not errors:
+        try:
+            for outcome in extensions["outcomes"]:
+                evaluate_metrics(outcome)
+        except ValueError as exc:
+            errors.append(str(exc))
+    return errors
+
+
+def evaluate_metrics(outcome):
+    metrics = {m["id"]: m for m in outcome["metrics"]}
+    values = {}
+    visiting = set()
+    def value(mid):
+        if mid in values:
+            return values[mid]
+        if mid in visiting:
+            raise ValueError(f"outcome {outcome['id']}: cyclic metric {mid}")
+        visiting.add(mid)
+        metric = metrics[mid]
+        if "operator" not in metric:
+            result = metric["value"]
+        else:
+            args = [value(i) for i in metric["inputs"]]
+            if metric["operator"] == "product":
+                result = math.prod(args)
+            elif metric["operator"] == "sum":
+                result = sum(args)
+            else:
+                if args[1] == 0:
+                    raise ValueError(f"outcome {outcome['id']}: zero denominator for {mid}")
+                result = args[0] / args[1]
+        if not math.isfinite(result):
+            raise ValueError(f"outcome {outcome['id']}: non-finite result for {mid}")
+        values[mid] = result
+        visiting.remove(mid)
+        return result
+    for mid in metrics:
+        value(mid)
+    return values
+
+
+def prepare(model, model_dir):
+    payload = copy.deepcopy(model)
+    payload["computed_outcomes"] = {o["id"]: evaluate_metrics(o) for o in model.get("outcomes", [])}
+    for screen in payload["screens"]:
+        screen.pop("embedded_preview", None)
+        source = screen.get("preview_html") or screen.get("preview_image")
+        if not source:
+            continue
+        path = (model_dir / source).resolve()
+        if not path.is_relative_to(model_dir.resolve()) or not path.is_file():
+            raise ValueError(f"screen {screen['id']}: preview asset is missing or outside model directory: {source}")
+        if screen.get("preview_html"):
+            screen["embedded_preview"] = {"kind": "html", "content": path.read_text(encoding="utf-8")}
+        else:
+            mime = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}.get(path.suffix.lower())
+            if not mime:
+                raise ValueError(f"screen {screen['id']}: preview image must be PNG, JPEG, or WebP")
+            screen["embedded_preview"] = {"kind": "image", "content": f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"}
+    return payload
+
+
+def generate(model, model_dir=None):
+    errors = validate(model)
+    if errors:
+        raise ValueError("Model validation failed:\n" + "\n".join(" - " + e for e in errors))
+    payload = prepare(model, Path(model_dir or "."))
+    encoded = json.dumps(payload, ensure_ascii=False, allow_nan=False).replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
+    template = (Path(__file__).resolve().parent.parent / "assets" / "canvas.html").read_text(encoding="utf-8")
+    replacements = {"TITLE": html.escape(model["title"]), "MODEL": encoded}
+    return re.sub(r"__DC_(TITLE|MODEL)__", lambda m: replacements[m[1]], template)
 
 
 def main():
-    ap=argparse.ArgumentParser(description="Generate interactive Domain Canvas HTML")
-    ap.add_argument("--model", required=True)
-    ap.add_argument("--out", required=True)
-    args=ap.parse_args()
-    mp=Path(args.model)
-    out=Path(args.out)
-    model=json.loads(mp.read_text(encoding="utf-8"))
-    errs=validate(model)
-    if errs:
-        print("Model validation failed:", file=sys.stderr)
-        for e in errs: print(" - "+e, file=sys.stderr)
-        raise SystemExit(2)
-    payload=json.dumps(model, ensure_ascii=False).replace("</", "<\\/")
-    title=html.escape(str(model.get("title","Domain Canvas")))
-    doc=f'''<!doctype html>
-<html lang="ja">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>{title}</title>
-<style>
-:root{{--bg:#f5f7fb;--panel:#fff;--ink:#172033;--muted:#6f7a90;--line:#d8deea;--accent:#356ee6;--accent2:#eaf0ff;--warn:#b56b00}}
-*{{box-sizing:border-box}} html,body{{width:100%;height:100%;margin:0;font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--ink);background:var(--bg);overflow:hidden}}
-#app{{width:100%;height:100%;display:flex;flex-direction:column}}
-.top{{height:58px;background:#fff;border-bottom:1px solid var(--line);display:flex;align-items:center;padding:0 16px;gap:16px;z-index:10}}
-.brand{{font-weight:750;white-space:nowrap;max-width:36vw;overflow:hidden;text-overflow:ellipsis}}
-.views{{display:flex;gap:6px;padding:4px;background:#f0f3f8;border-radius:10px}}
-.views button{{border:0;background:transparent;padding:7px 12px;border-radius:8px;color:var(--muted);font-weight:650;cursor:pointer}}
-.views button.active{{background:#fff;color:var(--ink);box-shadow:0 1px 4px #1a2b4b15}}
-.meta{{margin-left:auto;font-size:12px;color:var(--muted)}}
-.toolbar{{position:absolute;left:50%;bottom:18px;transform:translateX(-50%);z-index:9;background:#fff;border:1px solid var(--line);border-radius:12px;padding:6px;display:flex;gap:4px;box-shadow:0 8px 24px #2033581c}}
-.toolbar button{{border:0;background:transparent;border-radius:8px;padding:7px 10px;cursor:pointer;color:var(--muted)}} .toolbar button:hover{{background:#f2f5fa;color:var(--ink)}}
-#viewport{{position:relative;flex:1;overflow:hidden;cursor:grab;background-image:radial-gradient(#cad3e2 1px,transparent 1px);background-size:20px 20px}}
-#viewport.dragging{{cursor:grabbing}}
-#stage{{position:absolute;left:0;top:0;width:2200px;height:1400px;transform-origin:0 0}}
-#edges{{position:absolute;inset:0;width:2200px;height:1400px;overflow:visible;pointer-events:none}}
-.node{{position:absolute;background:var(--panel);border:1px solid var(--line);border-radius:12px;box-shadow:0 6px 18px #20335812;overflow:hidden}}
-.node .hd{{padding:10px 12px;border-bottom:1px solid #edf0f5;display:flex;align-items:center;gap:8px;font-weight:750}}
-.node .body{{padding:11px 12px;font-size:12px;color:var(--muted);line-height:1.45}}
-.entity{{width:250px}} .entity .desc{{min-height:34px}}
-.pill{{font-size:10px;font-weight:700;padding:3px 6px;border-radius:999px;background:var(--accent2);color:var(--accent);margin-left:auto}}
-.inferred{{color:var(--warn)}}
-.attr{{display:grid;grid-template-columns:1fr auto;gap:8px;padding:5px 0;border-bottom:1px dashed #edf0f5;color:var(--ink)}} .attr:last-child{{border-bottom:0}}
-.key{{font-size:10px;padding:2px 5px;border:1px solid var(--line);border-radius:5px;color:var(--muted)}}
-.screen{{width:420px;min-height:250px}} .screen .preview{{height:165px;background:linear-gradient(145deg,#f7f9fd,#eef2f8);border-bottom:1px solid #edf0f5;display:flex;align-items:center;justify-content:center;overflow:hidden}}
-.screen img,.screen iframe{{width:100%;height:100%;object-fit:cover;border:0;background:#fff}}
-.mock{{width:88%;height:78%;background:#fff;border:1px solid #dbe2ef;border-radius:8px;box-shadow:0 4px 16px #23406b10;display:flex}}
-.mock aside{{width:25%;border-right:1px solid #edf0f5;padding:10px}} .mock main{{flex:1;padding:10px}} .sk{{height:8px;background:#e6ebf4;border-radius:4px;margin:7px 0}} .sk.s{{width:55%}} .sk.m{{width:75%}}
-.bindings{{display:flex;gap:5px;flex-wrap:wrap;margin-top:8px}} .binding{{font-size:10px;padding:4px 6px;border-radius:6px;background:#f1f4f9;color:#536079}}
-.group-label{{position:absolute;font-size:11px;font-weight:750;letter-spacing:.04em;text-transform:uppercase;color:#7c879b;border:1px dashed #bfc9d8;border-radius:9px;padding:6px 9px;background:#f8faffcc}}
-.edge-label{{font-size:11px;fill:#5a6680;paint-order:stroke;stroke:#f5f7fb;stroke-width:5px;stroke-linejoin:round}}
-.legend{{position:absolute;right:14px;top:72px;z-index:7;background:#ffffffdf;backdrop-filter:blur(5px);border:1px solid var(--line);border-radius:10px;padding:9px 11px;font-size:11px;color:var(--muted);box-shadow:0 5px 18px #2033580e}}
-.dot{{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:5px;background:var(--accent)}}
-</style>
-</head>
-<body>
-<div id="app">
-  <div class="top">
-    <div class="brand">{title}</div>
-    <div class="views">
-      <button data-view="design" class="active">Design</button>
-      <button data-view="concept">Concept</button>
-      <button data-view="er">ER</button>
-    </div>
-    <div class="meta">single source · model.json</div>
-  </div>
-  <div id="viewport"><div id="stage"><svg id="edges"></svg><div id="nodes"></div></div></div>
-  <div class="legend"><span class="dot"></span>confirmed relation · dashed = inferred</div>
-  <div class="toolbar"><button id="fit">Fit</button><button id="zin">＋</button><button id="zout">－</button><button id="reset">100%</button></div>
-</div>
-<script id="model" type="application/json">{payload}</script>
-<script>
-const data=JSON.parse(document.getElementById('model').textContent);
-const viewport=document.getElementById('viewport'), stage=document.getElementById('stage'), nodes=document.getElementById('nodes'), svg=document.getElementById('edges');
-let view='design', tx=80, ty=60, scale=.82, drag=null;
-const entityById=Object.fromEntries(data.entities.map(e=>[e.id,e]));
-function esc(s){{return String(s??'').replace(/[&<>\"]/g,m=>({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}}[m]))}}
-function applyTransform(){{stage.style.transform=`translate(${{tx}}px,${{ty}}px) scale(${{scale}})`}}
-function node(id, cls, x,y, body){{const d=document.createElement('div');d.className='node '+cls;d.id='n-'+id;d.style.left=x+'px';d.style.top=y+'px';d.innerHTML=body;nodes.appendChild(d);return d}}
-function mock(){{return `<div class="mock"><aside><div class="sk m"></div><div class="sk"></div><div class="sk s"></div><div class="sk"></div><div class="sk m"></div></aside><main><div class="sk s"></div><div class="sk"></div><div class="sk"></div><div class="sk m"></div><div class="sk"></div><div class="sk s"></div><div class="sk"></div></main></div>`}}
-function screenHTML(s){{let p=mock(); if(s.preview_html) p=`<iframe src="${{esc(s.preview_html)}}" loading="lazy"></iframe>`; else if(s.preview_image) p=`<img src="${{esc(s.preview_image)}}" alt="${{esc(s.name)}}"/>`; const bs=(s.bindings||[]).map(b=>`<span class="binding">${{esc(entityById[b.entity]?.name||b.entity)}} · ${{esc(b.role)}}</span>`).join(''); return `<div class="hd">${{esc(s.name)}}<span class="pill">${{esc(s.route||'screen')}}</span></div><div class="preview">${{p}}</div><div class="body">${{esc(s.description||'')}}<div class="bindings">${{bs}}</div></div>`}}
-function conceptHTML(e){{return `<div class="hd">${{esc(e.name)}}<span class="pill">${{esc(e.group||'entity')}}</span></div><div class="body"><div class="desc">${{esc(e.description||'')}}</div></div>`}}
-function erHTML(e){{const attrs=(e.attributes||[]).map(a=>{{let k=[]; if(a.pk)k.push('PK'); if(a.fk)k.push('FK'); return `<div class="attr"><span>${{esc(a.name)}} <span style="color:#8b95a8">${{esc(a.type||'')}}</span></span>${{k.length?`<span class="key">${{k.join(' · ')}}</span>`:''}}</div>`}}).join('');return `<div class="hd">${{esc(e.name)}}<span class="pill">table</span></div><div class="body">${{attrs||'<span>No attributes</span>'}}</div>`}}
-function center(el){{return [el.offsetLeft+el.offsetWidth/2,el.offsetTop+el.offsetHeight/2]}}
-function edge(a,b,label, inferred=false, card=''){{const A=document.getElementById('n-'+a),B=document.getElementById('n-'+b);if(!A||!B)return;const [x1,y1]=center(A),[x2,y2]=center(B);const dx=x2-x1,dy=y2-y1;let sx=x1,sy=y1,ex=x2,ey=y2;if(Math.abs(dx)>Math.abs(dy)){{sx += Math.sign(dx)*A.offsetWidth/2; ex -= Math.sign(dx)*B.offsetWidth/2}}else{{sy += Math.sign(dy)*A.offsetHeight/2; ey -= Math.sign(dy)*B.offsetHeight/2}} const ns='http://www.w3.org/2000/svg';const line=document.createElementNS(ns,'path'); const mx=(sx+ex)/2; line.setAttribute('d',`M ${{sx}} ${{sy}} C ${{mx}} ${{sy}}, ${{mx}} ${{ey}}, ${{ex}} ${{ey}}`);line.setAttribute('fill','none');line.setAttribute('stroke', inferred?'#c58a31':'#356ee6');line.setAttribute('stroke-width','2.2');if(inferred) line.setAttribute('stroke-dasharray','7 6');svg.appendChild(line); if(label||card){{const t=document.createElementNS(ns,'text');t.setAttribute('x',mx);t.setAttribute('y',(sy+ey)/2-6);t.setAttribute('text-anchor','middle');t.setAttribute('class','edge-label');t.textContent=(label||'')+(card?`  ${{card}}`:'');svg.appendChild(t)}}}}
-function layoutEntities(mode){{const ents=data.entities; const cols=3; ents.forEach((e,i)=>{{const col=i%cols,row=Math.floor(i/cols);node(e.id,'entity',220+col*430,170+row*(mode==='er'?330:230),mode==='er'?erHTML(e):conceptHTML(e))}})}}
-function renderDesign(){{const screens=data.screens||[]; screens.forEach((s,i)=>{{const col=i%2,row=Math.floor(i/2);node('screen-'+s.id,'screen',160+col*730,120+row*390,screenHTML(s))}}); const used=[...new Set(screens.flatMap(s=>(s.bindings||[]).map(b=>b.entity)))]; used.forEach((id,i)=>{{const e=entityById[id]; if(e)node(id,'entity',1600,120+i*180,conceptHTML(e))}}); requestAnimationFrame(()=>{{screens.forEach(s=>(s.bindings||[]).forEach(b=>edge('screen-'+s.id,b.entity,b.role,false,'')))}})}}
-function renderConcept(){{layoutEntities('concept');requestAnimationFrame(()=>data.relationships.forEach(r=>edge(r.from,r.to,r.label,r.confidence==='inferred',`${{r.from_cardinality||''}} → ${{r.to_cardinality||''}}`)))}}
-function renderER(){{layoutEntities('er');requestAnimationFrame(()=>data.relationships.filter(r=>r.kind!=='domain').forEach(r=>edge(r.from,r.to,r.label,r.confidence==='inferred',`${{r.from_cardinality||''}} → ${{r.to_cardinality||''}}`)))}}
-function render(){{nodes.innerHTML='';svg.innerHTML=''; if(view==='design')renderDesign(); else if(view==='concept')renderConcept(); else renderER(); setTimeout(fit,60)}}
-function fit(){{const els=[...nodes.querySelectorAll('.node')]; if(!els.length)return;let minx=Infinity,miny=Infinity,maxx=-Infinity,maxy=-Infinity;els.forEach(e=>{{minx=Math.min(minx,e.offsetLeft);miny=Math.min(miny,e.offsetTop);maxx=Math.max(maxx,e.offsetLeft+e.offsetWidth);maxy=Math.max(maxy,e.offsetTop+e.offsetHeight)}});const w=maxx-minx,h=maxy-miny;const vw=viewport.clientWidth,vh=viewport.clientHeight;scale=Math.min(.95,(vw-120)/w,(vh-100)/h);scale=Math.max(.28,scale);tx=(vw-w*scale)/2-minx*scale;ty=(vh-h*scale)/2-miny*scale;applyTransform()}}
-[...document.querySelectorAll('.views button')].forEach(b=>b.onclick=()=>{{view=b.dataset.view;document.querySelectorAll('.views button').forEach(x=>x.classList.toggle('active',x===b));render()}});
-viewport.addEventListener('wheel',e=>{{e.preventDefault();const rect=viewport.getBoundingClientRect();const mx=e.clientX-rect.left,my=e.clientY-rect.top;const old=scale;scale=Math.max(.2,Math.min(2.2,scale*(e.deltaY<0?1.1:.9)));tx=mx-(mx-tx)*(scale/old);ty=my-(my-ty)*(scale/old);applyTransform()}},{{passive:false}});
-viewport.addEventListener('pointerdown',e=>{{if(e.button!==0)return;drag={{x:e.clientX,y:e.clientY,tx,ty}};viewport.setPointerCapture(e.pointerId);viewport.classList.add('dragging')}});
-viewport.addEventListener('pointermove',e=>{{if(!drag)return;tx=drag.tx+(e.clientX-drag.x);ty=drag.ty+(e.clientY-drag.y);applyTransform()}});
-viewport.addEventListener('pointerup',()=>{{drag=null;viewport.classList.remove('dragging')}});
-document.getElementById('fit').onclick=fit;document.getElementById('zin').onclick=()=>{{scale=Math.min(2.2,scale*1.15);applyTransform()}};document.getElementById('zout').onclick=()=>{{scale=Math.max(.2,scale/1.15);applyTransform()}};document.getElementById('reset').onclick=()=>{{scale=1;tx=40;ty=40;applyTransform()}};
-window.addEventListener('resize',fit);render();
-</script>
-</body></html>'''
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(doc, encoding="utf-8")
-    print(f"Generated {out} ({len(model['entities'])} entities, {len(model['screens'])} screens, {len(model['relationships'])} relationships)")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--out", required=True)
+    args = parser.parse_args()
+    source, destination = Path(args.model), Path(args.out)
+    try:
+        model = json.loads(source.read_text(encoding="utf-8"))
+        document = generate(model, source.parent)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_text(document, encoding="utf-8")
+    except (ValueError, OSError, RecursionError) as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
+    print(f"Generated {destination} ({len(model['entities'])} entities, {len(model['screens'])} screens, "
+          f"{sum(bool(model.get(k)) for k in EXTENSIONS)} extended views)")
+    return 0
 
-if __name__ == "__main__": main()
+
+if __name__ == "__main__":
+    raise SystemExit(main())

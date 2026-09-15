@@ -62,3 +62,21 @@ Roles:
 
 Use business-facing labels in `name` and relationship `label`.
 Keep code/schema identifiers in IDs or evidence notes.
+
+## Evidence for additional views
+
+| Claim | Preferred evidence | Do not infer it from |
+|---|---|---|
+| Allowed transition / actor / guard | state machine code, workflow specification, authorization checks | a status column or enum type alone |
+| Message order / commit / reply | handler implementation, trace, explicit sequence specification | screen bindings or an FK |
+| Customer and backstage stages | documented process, role ownership, observed handoffs | UI order alone |
+| Dataset grain and transformations | SQL, model definitions, orchestration configuration | similar column names |
+| Metric definition and denominator | agreed metric contract, query, cohort inclusion rules | labels such as “conversion rate” |
+
+`illustrative` marks an invented teaching example. `unknown` means evidence is missing. Neither is `inferred`: a sample number is not an estimate supported by data. Preserve confidence and evidence at the bundle and item levels; report conflicts rather than choosing the more convenient source.
+
+For lineage, record the meaning of one row before and after each transform, join keys and multiplicities, duplicate handling, and date basis. A declared FK is not a complete transformation specification.
+
+For outcomes, establish population, observation window, unit, numerator and denominator, maturity of the observation window, and missing-data handling. Do not divide one calendar month's contracts by that month's applications and describe it as cohort conversion without a valid individual mapping.
+
+The repository example has no application-to-contract key. Its 90-day conversion model is illustrative and separate from the contract-start-month lineage. Adding that connection requires supported linkage and aligned population/time semantics.

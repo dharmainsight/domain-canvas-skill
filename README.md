@@ -1,97 +1,61 @@
 # Domain Canvas Skill
 
-A Claude Code skill that builds a **single-source interactive canvas** connecting three views of the same product/domain model:
+A Claude Code skill that generates eight interactive views from one canonical model, connecting product structure, behavior, and measurement.
 
-- **Design** — screens and the objects they expose
-- **Concept** — business/domain objects and semantic relationships
-- **ER** — attributes, keys, foreign keys, and cardinalities
+| Group | View | Question |
+|---|---|---|
+| Structure | Design | Which business objects does a screen expose or change? |
+| Structure | Concept | What are the objects and their business relationships? |
+| Structure | ER | What are the keys, references, and cardinalities? |
+| Behavior | Lifecycle | Which event and condition allow a state change? |
+| Behavior | Sequence | In what order do saving, replying, and notification occur? |
+| Behavior | Service blueprint | How do customer actions connect to frontstage and backstage work? |
+| Measurement | Lineage | Which data and transformations produce this dataset? |
+| Measurement | KPI | How does the result decompose into defined metric inputs? |
 
-All three views are generated from the same `model.json`, so changing a relationship once updates every projection after regeneration.
+The generator uses Python 3.9+ standard libraries. Its standalone HTML has no external JavaScript or CSS dependencies. Existing version 1 models remain supported; missing extensions show an undefined state.
 
-## Live demo
+## Demo
 
-**https://dharmainsight.github.io/domain-canvas-skill/**
+[Open the GitHub Pages demo](https://dharmainsight.github.io/domain-canvas-skill/). The published demo tracks `main`; proposed branch changes appear after merge and Pages deployment.
 
-The repository includes a self-contained GitHub Pages demo. It supports:
+The [example model](example/model.json) contains five entities, three screens, an application state machine, two processing scenarios, a service blueprint, dataset lineage, and a KPI decomposition. Business rules and metric values are explicitly illustrative. The KPI's application cohort and the lineage's contract-start-month aggregate are different measures, with no unsupported application-to-contract join.
 
-- Design / Concept / ER view switching
-- pan and wheel zoom
-- fit-to-viewport and zoom controls
-- screen-to-entity bindings
-- relationship labels and cardinalities
-- PK / FK display in the ER projection
+## Readable by default
 
-The demo uses the same real-estate CRM model stored in [`example/model.json`](example/model.json).
+- Navigation separates structure, behavior, and measurement.
+- Select a screen, process, or entity neighborhood to focus the question.
+- Names and primary relationships appear first; full attributes, conditions, formulas, and evidence appear when selected.
+- State, sequence, matrix, lineage, and KPI views preserve their distinct meanings.
+- Pan by dragging or scrolling; zoom with Ctrl/Command + wheel or the buttons. “全体表示” fits the whole graph; “読みやすく” restores readable sizing. Dense graphs may require panning.
+- Keyboard controls, mobile navigation, dark mode, and reduced-motion support are included.
 
-## Install in a project
+[Diagram selection](.claude/skills/domain-canvas/references/diagram-selection.md) catalogs 36 use cases for beginners, engineering roles, and business decisions, and distinguishes supported views from future candidates. [Visual design rules](.claude/skills/domain-canvas/references/visual-design.md) explain how to select information without dropping material conditions.
 
-Copy this directory into your repository:
+## Install
 
-```text
-.claude/skills/domain-canvas/
-```
-
-Then in Claude Code, invoke it directly:
+Copy the **entire** `.claude/skills/domain-canvas/` directory, including `assets/canvas.html`, into your project. Invoke:
 
 ```text
 /domain-canvas contracts
 ```
 
-Or ask naturally, for example:
+For example: “契約まわりの画面・概念・ERに、状態遷移と顧客対応の流れを加えて”。
 
-```text
-契約まわりの画面・概念モデル・ER図を同じキャンバスにまとめて
-```
+The skill maintains `.domain-canvas/model.json`, generated `index.html`, and a README with evidence and refresh notes. [Model schema](.claude/skills/domain-canvas/references/model-schema.md) documents the optional extensions; [extraction rules](.claude/skills/domain-canvas/references/extraction-rules.md) explain confidence and evidence.
 
-## What the skill creates
-
-```text
-.domain-canvas/
-├── model.json      # canonical source of truth
-├── index.html      # generated interactive canvas
-└── README.md       # evidence / assumptions / refresh notes
-```
-
-The bundled generator is dependency-free Python 3.
-
-## Try the included example locally
+## Generate and validate
 
 From this repository root:
 
 ```bash
 python .claude/skills/domain-canvas/scripts/generate_canvas.py \
   --model example/model.json \
-  --out example/index.html
+  --out docs/index.html
+python -m unittest discover -s tests -v
+node tests/check-canvas.mjs
 ```
 
-Then open `example/index.html` in a browser. The checked-in `docs/index.html` is the same style of generated canvas used for the GitHub Pages demo.
+Open `docs/index.html` in a browser. Update the model or `assets/canvas.html`, then regenerate; do not edit generated HTML by hand. Local image and self-contained HTML previews are embedded in the output. Supplied missing assets, dangling references, cyclic lineage/formulas, and invalid metric values fail generation with a diagnostic.
 
-## Repository layout
-
-```text
-.
-├── .claude/skills/domain-canvas/
-│   ├── SKILL.md
-│   ├── references/
-│   │   ├── extraction-rules.md
-│   │   └── model-schema.md
-│   └── scripts/
-│       └── generate_canvas.py
-├── .github/workflows/pages.yml
-├── docs/
-│   ├── .nojekyll
-│   └── index.html          # GitHub Pages demo
-├── example/
-│   └── model.json          # sample source model
-└── README.md
-```
-
-## Design principle
-
-The value is not three separate diagrams. It is one model projected at three levels:
-
-```text
-UI screens  ↔  domain objects  ↔  data model
-```
-
-That makes the relationship between what users see, what the business means, and what the database stores reviewable without maintaining three independent sources of truth.
+The automated checks cover model validation, legacy compatibility, preview portability, safe embedding, formula arithmetic, and graph layout logic. They do not substitute for checking actual browser typography, overlap, and interaction.

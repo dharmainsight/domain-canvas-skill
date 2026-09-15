@@ -10,25 +10,18 @@ All three views are generated from the same `model.json`, so changing a relation
 
 ## Live demo
 
-The included GitHub Pages workflow deploys the interactive demo here:
-
 **https://dharmainsight.github.io/domain-canvas-skill/**
 
-The demo is a self-contained HTML app: switch between Design / Concept / ER, pan, zoom, and fit the graph to the viewport.
+The repository includes a self-contained GitHub Pages demo. It supports:
 
-## Preview
+- Design / Concept / ER view switching
+- pan and wheel zoom
+- fit-to-viewport and zoom controls
+- screen-to-entity bindings
+- relationship labels and cardinalities
+- PK / FK display in the ER projection
 
-### Design view
-
-![Design view](example/design.png)
-
-### Concept view
-
-![Concept view](example/concept.png)
-
-### ER view
-
-![ER view](example/er.png)
+The demo uses the same real-estate CRM model stored in [`example/model.json`](example/model.json).
 
 ## Install in a project
 
@@ -49,8 +42,6 @@ Or ask naturally, for example:
 ```text
 契約まわりの画面・概念モデル・ER図を同じキャンバスにまとめて
 ```
-
-Claude Code project skills live under `.claude/skills/<skill-name>/SKILL.md`.
 
 ## What the skill creates
 
@@ -73,7 +64,7 @@ python .claude/skills/domain-canvas/scripts/generate_canvas.py \
   --out example/index.html
 ```
 
-Then open `example/index.html` in a browser.
+Then open `example/index.html` in a browser. The checked-in `docs/index.html` is the same style of generated canvas used for the GitHub Pages demo.
 
 ## Repository layout
 
@@ -88,14 +79,10 @@ Then open `example/index.html` in a browser.
 │       └── generate_canvas.py
 ├── .github/workflows/pages.yml
 ├── docs/
-│   ├── index.html          # GitHub Pages demo
-│   └── model.json          # demo source model
+│   ├── .nojekyll
+│   └── index.html          # GitHub Pages demo
 ├── example/
-│   ├── index.html
-│   ├── model.json
-│   ├── design.png
-│   ├── concept.png
-│   └── er.png
+│   └── model.json          # sample source model
 └── README.md
 ```
 

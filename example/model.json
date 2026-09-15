@@ -1,0 +1,82 @@
+{
+  "title": "Real-estate CRM domain canvas",
+  "version": 1,
+  "concept_groups": [
+    {"id": "crm", "name": "CRM", "description": "Customers and commercial relationships"},
+    {"id": "property", "name": "Property", "description": "Inventory and property units"},
+    {"id": "deal", "name": "Deal", "description": "Applications and contracts"}
+  ],
+  "entities": [
+    {
+      "id": "customer",
+      "name": "顧客",
+      "description": "契約・申込の主体となる顧客。",
+      "group": "crm",
+      "attributes": [
+        {"name": "id", "type": "uuid", "pk": true, "nullable": false},
+        {"name": "name", "type": "text", "nullable": false},
+        {"name": "email", "type": "text", "nullable": true}
+      ]
+    },
+    {
+      "id": "property",
+      "name": "物件",
+      "description": "契約対象となる物件・部屋。",
+      "group": "property",
+      "attributes": [
+        {"name": "id", "type": "uuid", "pk": true, "nullable": false},
+        {"name": "name", "type": "text", "nullable": false},
+        {"name": "address", "type": "text", "nullable": false}
+      ]
+    },
+    {
+      "id": "application",
+      "name": "申込",
+      "description": "顧客が物件に対して行う入居申込。",
+      "group": "deal",
+      "attributes": [
+        {"name": "id", "type": "uuid", "pk": true, "nullable": false},
+        {"name": "customer_id", "type": "uuid", "nullable": false, "fk": {"entity": "customer", "attribute": "id"}},
+        {"name": "property_id", "type": "uuid", "nullable": false, "fk": {"entity": "property", "attribute": "id"}},
+        {"name": "status", "type": "enum", "nullable": false}
+      ]
+    },
+    {
+      "id": "contract",
+      "name": "契約",
+      "description": "成立した賃貸契約。",
+      "group": "deal",
+      "attributes": [
+        {"name": "id", "type": "uuid", "pk": true, "nullable": false},
+        {"name": "customer_id", "type": "uuid", "nullable": false, "fk": {"entity": "customer", "attribute": "id"}},
+        {"name": "property_id", "type": "uuid", "nullable": false, "fk": {"entity": "property", "attribute": "id"}},
+        {"name": "started_on", "type": "date", "nullable": false},
+        {"name": "status", "type": "enum", "nullable": false}
+      ]
+    },
+    {
+      "id": "document",
+      "name": "書類",
+      "description": "申込・契約に紐づく提出書類。",
+      "group": "deal",
+      "attributes": [
+        {"name": "id", "type": "uuid", "pk": true, "nullable": false},
+        {"name": "contract_id", "type": "uuid", "nullable": true, "fk": {"entity": "contract", "attribute": "id"}},
+        {"name": "file_name", "type": "text", "nullable": false},
+        {"name": "status", "type": "enum", "nullable": false}
+      ]
+    }
+  ],
+  "relationships": [
+    {"id": "customer-applications", "from": "customer", "to": "application", "label": "申し込む", "from_cardinality": "1", "to_cardinality": "0..*", "kind": "both", "confidence": "confirmed", "evidence": "application.customer_id"},
+    {"id": "property-applications", "from": "property", "to": "application", "label": "申込対象", "from_cardinality": "1", "to_cardinality": "0..*", "kind": "both", "confidence": "confirmed", "evidence": "application.property_id"},
+    {"id": "customer-contracts", "from": "customer", "to": "contract", "label": "契約する", "from_cardinality": "1", "to_cardinality": "0..*", "kind": "both", "confidence": "confirmed", "evidence": "contract.customer_id"},
+    {"id": "property-contracts", "from": "property", "to": "contract", "label": "契約対象", "from_cardinality": "1", "to_cardinality": "0..*", "kind": "both", "confidence": "confirmed", "evidence": "contract.property_id"},
+    {"id": "contract-documents", "from": "contract", "to": "document", "label": "書類を持つ", "from_cardinality": "1", "to_cardinality": "0..*", "kind": "both", "confidence": "confirmed", "evidence": "document.contract_id"}
+  ],
+  "screens": [
+    {"id": "contract-detail", "name": "契約詳細", "route": "/contracts/:id", "description": "契約状況、書類、顧客、物件を確認する。", "bindings": [{"entity": "contract", "role": "primary"}, {"entity": "customer", "role": "context"}, {"entity": "property", "role": "context"}, {"entity": "document", "role": "collection"}]},
+    {"id": "application-detail", "name": "申込詳細", "route": "/applications/:id", "description": "申込内容と審査状態を確認する。", "bindings": [{"entity": "application", "role": "primary"}, {"entity": "customer", "role": "context"}, {"entity": "property", "role": "context"}]},
+    {"id": "customer-detail", "name": "顧客詳細", "route": "/customers/:id", "description": "顧客と関連する申込・契約を確認する。", "bindings": [{"entity": "customer", "role": "primary"}, {"entity": "application", "role": "collection"}, {"entity": "contract", "role": "collection"}]}
+  ]
+}

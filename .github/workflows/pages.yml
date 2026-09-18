@@ -23,6 +23,20 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+      - name: Generate demo
+        run: >-
+          python .claude/skills/domain-canvas/scripts/generate_canvas.py
+          --model example/model.json
+          --out docs/index.html
+      - name: Self-check demo
+        run: >-
+          python .claude/skills/domain-canvas/scripts/self_check.py
+          --model example/model.json
+          --html docs/index.html
       - name: Configure Pages
         uses: actions/configure-pages@v5
         with:

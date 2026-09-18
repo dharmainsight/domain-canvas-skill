@@ -1,6 +1,19 @@
 {
   "title": "Real-estate CRM domain canvas",
   "version": 1,
+  "presentation": {
+    "focus_entities": ["contract", "document"],
+    "theme": {
+      "background": "#f3f4ef",
+      "surface": "#ffffff",
+      "ink": "#20231c",
+      "muted": "#667064",
+      "line": "#cfd2c7",
+      "accent": "#9b6200",
+      "accent_soft": "#fbf3ce",
+      "warning": "#9a5a00"
+    }
+  },
   "concept_groups": [
     {"id": "crm", "name": "CRM", "description": "Customers and commercial relationships"},
     {"id": "property", "name": "Property", "description": "Inventory and property units"},

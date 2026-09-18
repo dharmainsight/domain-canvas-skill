@@ -6,6 +6,19 @@
 {
   "title": "Product domain canvas",
   "version": 1,
+  "presentation": {
+    "focus_entities": ["contract", "document"],
+    "theme": {
+      "background": "#f3f4ef",
+      "surface": "#ffffff",
+      "ink": "#20231c",
+      "muted": "#667064",
+      "line": "#cfd2c7",
+      "accent": "#9b6200",
+      "accent_soft": "#fbf3ce",
+      "warning": "#9a5a00"
+    }
+  },
   "entities": [
     {
       "id": "customer",
@@ -13,17 +26,8 @@
       "description": "A person or organization receiving the service.",
       "group": "crm",
       "attributes": [
-        {
-          "name": "id",
-          "type": "uuid",
-          "pk": true,
-          "nullable": false
-        },
-        {
-          "name": "name",
-          "type": "text",
-          "nullable": false
-        }
+        {"name": "id", "type": "uuid", "pk": true, "nullable": false},
+        {"name": "name", "type": "text", "nullable": false}
       ]
     }
   ],
@@ -56,35 +60,31 @@
     }
   ],
   "concept_groups": [
-    {
-      "id": "crm",
-      "name": "CRM",
-      "description": "People and commercial relationships."
-    }
+    {"id": "crm", "name": "CRM", "description": "People and commercial relationships."}
   ]
 }
 ```
 
-## Required fields
-
-### Root
+## Required root fields
 
 - `title`: string
 - `version`: integer
 - `entities`: array
 - `relationships`: array
 - `screens`: array
-- `concept_groups`: array, may be empty
+- `concept_groups`: array; may be empty
 
-### Entity
+`presentation` is optional.
+
+## Entity
 
 - `id`: stable unique string
 - `name`: display label
 - `description`: concise business meaning
-- `attributes`: array, may be empty in early conceptual modeling
-- `group`: optional concept group id
+- `attributes`: array; may be empty during early conceptual modeling
+- `group`: optional concept-group id
 
-### Attribute
+## Attribute
 
 - `name`: field/column name
 - `type`: display type
@@ -93,7 +93,7 @@
 - `nullable`: optional boolean
 - `description`: optional string
 
-### Relationship
+## Relationship
 
 - `id`: stable unique string
 - `from`, `to`: entity ids
@@ -103,21 +103,46 @@
 - `confidence`: `confirmed` or `inferred`
 - `evidence`: optional concise source note
 
-### Screen
+## Screen
 
 - `id`: stable unique string
 - `name`: display label
 - `route`: optional route or screen identifier
 - `description`: optional
-- `preview_image`: optional relative asset path
-- `preview_html`: optional relative local HTML path
+- `preview_image`: optional local relative asset path
+- `preview_html`: optional local relative HTML path
 - `bindings`: array of `{ "entity": "...", "role": "primary|context|collection|edit|create" }`
+
+## Presentation
+
+Presentation affects reading, not domain meaning.
+
+### `focus_entities`
+
+Optional array of zero to two entity IDs. Use it to emphasize the current review question. Do not add more than two; if more items are important, reduce scope or use overview/detail instead.
+
+### `theme`
+
+Optional restrained brand palette. Supported keys:
+
+- `background`
+- `surface`
+- `ink`
+- `muted`
+- `line`
+- `accent`
+- `accent_soft`
+- `warning`
+
+Values must be hex colors (`#RGB`, `#RRGGBB`, or `#RRGGBBAA`). The generator falls back to its accessible editorial palette for missing keys.
 
 ## Invariants
 
-- Entity ids are unique.
-- Screen ids are unique.
+- Entity IDs are unique.
+- Screen IDs are unique.
 - Relationship endpoints must exist.
-- Binding entity ids must exist.
+- Binding entity IDs must exist.
+- Focus entity IDs must exist and total no more than two.
 - A screen can have at most one `primary` binding unless the UI genuinely represents a composite object.
-- `preview_image` and `preview_html` may both be absent; if both are present, the generator prefers `preview_html`.
+- `preview_image` and `preview_html` must be local relative paths; remote URLs and parent traversal are rejected.
+- If both previews are present, the generator prefers `preview_html`.

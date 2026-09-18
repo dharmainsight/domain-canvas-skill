@@ -1,0 +1,4 @@
+interface:
+  display_name: "Domain Canvas"
+  short_description: "Connect screens, domain concepts, and ER/data in one evidence-grounded canvas."
+  brand_color: "#9B6200"
